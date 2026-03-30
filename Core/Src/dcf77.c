@@ -94,6 +94,7 @@ void DCF77_Process(void) {
         printf(" HEURE  : %02d:%02d\r\n", heures, minutes);
         printf(" DATE   : %02d/%02d/20%02d\r\n", jour, mois, annee);
         printf("=================================\r\n\r\n");
+        printf("hello");
 
         etat_actuel_dcf = CHERCHE_SYNCHRO;
     }
