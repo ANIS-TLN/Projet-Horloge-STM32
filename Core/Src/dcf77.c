@@ -10,6 +10,10 @@ static uint8_t index_bit = 0;
 
 typedef enum { CHERCHE_SYNCHRO, LECTURE_DONNEES, DECODAGE } Etat_DCF;
 static Etat_DCF etat_actuel_dcf = CHERCHE_SYNCHRO;
+static uint8_t dcf_heures = 0;
+static uint8_t dcf_minutes = 0;
+static uint8_t flag_nouvelle_heure = 0;
+
 
 // --- Initialisation ---
 void DCF77_Init(void) {
@@ -90,6 +94,9 @@ void DCF77_Process(void) {
         uint8_t annee = (annee_dizaine * 10) + annee_unite;
 
         // --- AFFICHAGE ---
+        dcf_heures = heures;
+        dcf_minutes = minutes;
+        flag_nouvelle_heure = 1; // On lève le drapeau pour prévenir le main !
         printf("\r\n=================================\r\n");
         printf(" HEURE  : %02d:%02d\r\n", heures, minutes);
         printf(" DATE   : %02d/%02d/20%02d\r\n", jour, mois, annee);
@@ -98,4 +105,15 @@ void DCF77_Process(void) {
 
         etat_actuel_dcf = CHERCHE_SYNCHRO;
     }
+
+}
+
+uint8_t DCF77_NouvelleHeureDispo(uint8_t *h, uint8_t *m) {
+    if (flag_nouvelle_heure == 1) {
+        *h = dcf_heures;
+        *m = dcf_minutes;
+        flag_nouvelle_heure = 0; // On baisse le drapeau
+        return 1; // Vrai : une nouvelle heure est dispo !
+    }
+    return 0; // Faux : rien de nouveau
 }

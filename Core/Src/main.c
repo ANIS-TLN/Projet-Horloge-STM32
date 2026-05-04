@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include "dcf77.h"   // <-- Ta nouvelle bibliothèque est incluse ici !
+#include "buzzer.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -94,25 +95,77 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART2_UART_Init();
-
   /* USER CODE BEGIN 2 */
+   DCF77_Init();
 
-  // On lance l'initialisation de ton module (Affiche le texte de démarrage)
-  DCF77_Init();
+    // --- Variables de l'horloge interne ---
+    uint8_t horloge_h = 0, horloge_m = 0, horloge_s = 0;
+    uint32_t dernier_tick_seconde = HAL_GetTick(); // Chrono pour compter les secondes
 
+    // --- Variables de l'alarme ---
+    uint8_t alarme_active = 0;
+    uint8_t alarme_h = 0, alarme_m = 0;
+
+    printf("En attente de la premiere synchronisation...\r\n");
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-      // Le cerveau du capteur tourne en tâche de fond !
-      DCF77_Process();
+	  // 1. On écoute le signal radio (Tourne en tâche de fond)
+	        DCF77_Process();
 
-      HAL_Delay(5); // Anti-rebond
+	        // 2. Si le DCF77 vient de capter une heure parfaite
+	        if (DCF77_NouvelleHeureDispo(&horloge_h, &horloge_m) == 1) {
+	            horloge_s = 0; // On remet les secondes à zéro parfaitement
+	            printf("\r\n[SYNC] Horloge interne mise a jour : %02d:%02d:00\r\n", horloge_h, horloge_m);
 
-    /* USER CODE END WHILE */
-    /* USER CODE BEGIN 3 */
+	            // Programmation automatique de l'alarme pour dans 2 minutes
+	            alarme_m = horloge_m + 2;
+	            alarme_h = horloge_h;
+
+	            // Gérer le passage à l'heure suivante (ex: 59 min + 2 = 61 -> 01 min)
+	            if (alarme_m >= 60) {
+	                alarme_m -= 60;
+	                alarme_h = (alarme_h + 1) % 24; // % 24 gère minuit
+	            }
+
+	            alarme_active = 1; // On arme l'alarme !
+	            printf("[ALARME] Reglee automatiquement pour : %02d:%02d:00\r\n", alarme_h, alarme_m);
+	        }
+
+	        // 3. Gestion de l'Horloge Interne (S'incrémente chaque seconde)
+	        if (HAL_GetTick() - dernier_tick_seconde >= 1000) {
+	            dernier_tick_seconde = HAL_GetTick(); // On réarme le chrono de 1s
+	            horloge_s++;
+
+	            if (horloge_s >= 60) {
+	                horloge_s = 0;
+	                horloge_m++;
+
+	                if (horloge_m >= 60) {
+	                    horloge_m = 0;
+	                    horloge_h = (horloge_h + 1) % 24;
+	                }
+	            }
+
+	            // Décommenter la ligne suivante si tu veux voir l'heure tourner en direct (ça fait beaucoup de texte)
+	            // printf("Temps: %02d:%02d:%02d\r", horloge_h, horloge_m, horloge_s);
+
+	            // 4. Vérification de l'alarme
+	            if (alarme_active == 1 && horloge_h == alarme_h && horloge_m == alarme_m && horloge_s == 0) {
+	                printf("\r\n>>> DRING ! C'EST L'HEURE (2 min ecoulees) <<< \r\n");
+
+	                Buzzer_Sonnerie_Douce(); // On lance notre nouvelle sonnerie cool
+
+	                alarme_active = 0; // On éteint l'alarme pour qu'elle ne sonne qu'une fois
+	            }
+	        }
+
+	        HAL_Delay(5); // Anti-rebond
+	      /* USER CODE END WHILE */
+	      /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
 }
@@ -221,14 +274,17 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
 
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET);
+
   /*Configure GPIO pin : PA1 */
   GPIO_InitStruct.Pin = GPIO_PIN_1;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PA5 */
-  GPIO_InitStruct.Pin = GPIO_PIN_5;
+  /*Configure GPIO pins : PA5 PA8 */
+  GPIO_InitStruct.Pin = GPIO_PIN_5|GPIO_PIN_8;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -260,7 +316,7 @@ void Error_Handler(void)
 #ifdef  USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
-  * where the assert_param error has occurred.
+  *         where the assert_param error has occurred.
   * @param  file: pointer to the source file name
   * @param  line: assert_param error line source number
   * @retval None

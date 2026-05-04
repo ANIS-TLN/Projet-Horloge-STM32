@@ -11,5 +11,7 @@ void DCF77_Init(void);
 
 // Fonction à appeler en boucle dans le while(1)
 void DCF77_Process(void);
+// Ajoute ça tout en bas
+uint8_t DCF77_NouvelleHeureDispo(uint8_t *h, uint8_t *m);
 
 #endif /* INC_DCF77_H_ */
