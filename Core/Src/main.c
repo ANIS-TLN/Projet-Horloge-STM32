@@ -24,6 +24,8 @@
 #include <stdio.h>
 #include "dcf77.h"   // <-- Ta nouvelle bibliothèque est incluse ici !
 #include "buzzer.h"
+#include "lcd_i2c.h"
+#include "max7219.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -42,6 +44,10 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+I2C_HandleTypeDef hi2c1;
+
+SPI_HandleTypeDef hspi1;
+
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
@@ -52,6 +58,8 @@ UART_HandleTypeDef huart2;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_I2C1_Init(void);
+static void MX_SPI1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -95,78 +103,72 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART2_UART_Init();
+  MX_I2C1_Init();
+  MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
-   DCF77_Init();
-
-    // --- Variables de l'horloge interne ---
+  // Variables pour l'horloge
     uint8_t horloge_h = 0, horloge_m = 0, horloge_s = 0;
-    uint32_t dernier_tick_seconde = HAL_GetTick(); // Chrono pour compter les secondes
+    uint32_t dernier_tick_seconde = HAL_GetTick();
+    uint8_t systeme_synchronise = 0; // 0 = Radio, 1 = Horloge interne
 
-    // --- Variables de l'alarme ---
-    uint8_t alarme_active = 0;
-    uint8_t alarme_h = 0, alarme_m = 0;
+    // 1. Initialisation de l'écran
+    lcd_init();
 
-    printf("En attente de la premiere synchronisation...\r\n");
-  /* USER CODE END 2 */
+    // 2. On lance la recherche radio !
+    DCF77_Reset_Recherche();
 
-  /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
-  while (1)
-  {
-	  // 1. On écoute le signal radio (Tourne en tâche de fond)
-	        DCF77_Process();
+    /* USER CODE END 2 */
 
-	        // 2. Si le DCF77 vient de capter une heure parfaite
-	        if (DCF77_NouvelleHeureDispo(&horloge_h, &horloge_m) == 1) {
-	            horloge_s = 0; // On remet les secondes à zéro parfaitement
-	            printf("\r\n[SYNC] Horloge interne mise a jour : %02d:%02d:00\r\n", horloge_h, horloge_m);
+    /* Infinite loop */
+    /* USER CODE BEGIN WHILE */
+    while (1)
+    {
+        // --- MODE 1 : RECHERCHE RADIO ---
+        if (systeme_synchronise == 0) {
+            DCF77_Process(); // Écoute la radio
 
-	            // Programmation automatique de l'alarme pour dans 2 minutes
-	            alarme_m = horloge_m + 2;
-	            alarme_h = horloge_h;
+            uint8_t h, m;
+            // Si on a décodé la trame avec succès :
+            if (DCF77_NouvelleHeureDispo(&h, &m) == 1) {
+                horloge_h = h;
+                horloge_m = m;
+                horloge_s = 0; // On commence à la seconde zéro
+                dernier_tick_seconde = HAL_GetTick();
+                systeme_synchronise = 1; // On passe en mode Horloge Interne !
+            }
+        }
+        // --- MODE 2 : HORLOGE INTERNE (Autonome) ---
+        else {
+            // Toutes les 1000 millisecondes (1 seconde)
+            if (HAL_GetTick() - dernier_tick_seconde >= 1000) {
+                dernier_tick_seconde = HAL_GetTick();
 
-	            // Gérer le passage à l'heure suivante (ex: 59 min + 2 = 61 -> 01 min)
-	            if (alarme_m >= 60) {
-	                alarme_m -= 60;
-	                alarme_h = (alarme_h + 1) % 24; // % 24 gère minuit
-	            }
+                // On incrémente le temps
+                horloge_s++;
+                if (horloge_s >= 60) { horloge_s = 0; horloge_m++; }
+                if (horloge_m >= 60) { horloge_m = 0; horloge_h++; }
+                if (horloge_h >= 24) { horloge_h = 0; }
 
-	            alarme_active = 1; // On arme l'alarme !
-	            printf("[ALARME] Reglee automatiquement pour : %02d:%02d:00\r\n", alarme_h, alarme_m);
-	        }
+                // On met à jour l'écran LCD !
+                char buffer_heure[16];
+                lcd_clear();
+                lcd_put_cur(0, 4);
+                sprintf(buffer_heure, "%02d:%02d:%02d", horloge_h, horloge_m, horloge_s);
+                lcd_send_string(buffer_heure);
+            }
+        }
 
-	        // 3. Gestion de l'Horloge Interne (S'incrémente chaque seconde)
-	        if (HAL_GetTick() - dernier_tick_seconde >= 1000) {
-	            dernier_tick_seconde = HAL_GetTick(); // On réarme le chrono de 1s
-	            horloge_s++;
+        // --- LE BOUTON RESET (Bouton Bleu de la carte Nucleo) ---
+        if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_RESET) {
+            systeme_synchronise = 0; // On repasse en mode radio
+            DCF77_Reset_Recherche(); // On remet l'écran à zéro
+            HAL_Delay(500); // Anti-rebond
+        }
 
-	            if (horloge_s >= 60) {
-	                horloge_s = 0;
-	                horloge_m++;
+      /* USER CODE END WHILE */
 
-	                if (horloge_m >= 60) {
-	                    horloge_m = 0;
-	                    horloge_h = (horloge_h + 1) % 24;
-	                }
-	            }
-
-	            // Décommenter la ligne suivante si tu veux voir l'heure tourner en direct (ça fait beaucoup de texte)
-	            // printf("Temps: %02d:%02d:%02d\r", horloge_h, horloge_m, horloge_s);
-
-	            // 4. Vérification de l'alarme
-	            if (alarme_active == 1 && horloge_h == alarme_h && horloge_m == alarme_m && horloge_s == 0) {
-	                printf("\r\n>>> DRING ! C'EST L'HEURE (2 min ecoulees) <<< \r\n");
-
-	                Buzzer_Sonnerie_Douce(); // On lance notre nouvelle sonnerie cool
-
-	                alarme_active = 0; // On éteint l'alarme pour qu'elle ne sonne qu'une fois
-	            }
-	        }
-
-	        HAL_Delay(5); // Anti-rebond
-	      /* USER CODE END WHILE */
-	      /* USER CODE BEGIN 3 */
-  }
+      /* USER CODE BEGIN 3 */
+    }
   /* USER CODE END 3 */
 }
 
@@ -217,6 +219,94 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief I2C1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C1_Init(void)
+{
+
+  /* USER CODE BEGIN I2C1_Init 0 */
+
+  /* USER CODE END I2C1_Init 0 */
+
+  /* USER CODE BEGIN I2C1_Init 1 */
+
+  /* USER CODE END I2C1_Init 1 */
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.Timing = 0x10D19CE4;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Analogue filter
+  */
+  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Digital filter
+  */
+  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c1, 0) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C1_Init 2 */
+
+  /* USER CODE END I2C1_Init 2 */
+
+}
+
+/**
+  * @brief SPI1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SPI1_Init(void)
+{
+
+  /* USER CODE BEGIN SPI1_Init 0 */
+
+  /* USER CODE END SPI1_Init 0 */
+
+  /* USER CODE BEGIN SPI1_Init 1 */
+
+  /* USER CODE END SPI1_Init 1 */
+  /* SPI1 parameter configuration*/
+  hspi1.Instance = SPI1;
+  hspi1.Init.Mode = SPI_MODE_MASTER;
+  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi1.Init.NSS = SPI_NSS_SOFT;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
+  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi1.Init.CRCPolynomial = 7;
+  hspi1.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
+  hspi1.Init.NSSPMode = SPI_NSS_PULSE_ENABLE;
+  if (HAL_SPI_Init(&hspi1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN SPI1_Init 2 */
+
+  /* USER CODE END SPI1_Init 2 */
+
 }
 
 /**
@@ -272,10 +362,23 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_0, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOA, CS_MATRICE_Pin|BUZZER_PIN_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin : PC13 */
+  GPIO_InitStruct.Pin = GPIO_PIN_13;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PC0 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PA1 */
   GPIO_InitStruct.Pin = GPIO_PIN_1;
@@ -283,12 +386,19 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PA5 PA8 */
-  GPIO_InitStruct.Pin = GPIO_PIN_5|GPIO_PIN_8;
+  /*Configure GPIO pin : CS_MATRICE_Pin */
+  GPIO_InitStruct.Pin = CS_MATRICE_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(CS_MATRICE_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : BUZZER_PIN_Pin */
+  GPIO_InitStruct.Pin = BUZZER_PIN_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  HAL_GPIO_Init(BUZZER_PIN_GPIO_Port, &GPIO_InitStruct);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */

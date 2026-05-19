@@ -57,6 +57,10 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define CS_MATRICE_Pin GPIO_PIN_4
+#define CS_MATRICE_GPIO_Port GPIOA
+#define BUZZER_PIN_Pin GPIO_PIN_8
+#define BUZZER_PIN_GPIO_Port GPIOA
 #define TMS_Pin GPIO_PIN_13
 #define TMS_GPIO_Port GPIOA
 #define TCK_Pin GPIO_PIN_14
